@@ -101,7 +101,7 @@ spec:
 #        accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 6Gi
+            storage: 60Gi
     gracePeriod: 600
   haproxy:
     enabled: true
@@ -137,12 +137,12 @@ spec:
 #        default_backend galera-replica-nodes
 #    imagePullSecrets:
 #      - name: private-registry-credentials
-#    annotations:
-#      cloud.google.com/load-balancer-type: "Internal"
+    annotations:
+      cloud.google.com/load-balancer-type: "Internal"
 #    labels:
 #      rack: rack-22
-#    serviceType: LoadBalancer
-    serviceType: ClusterIP
+    serviceType: LoadBalancer
+#    serviceType: ClusterIP
 #    replicasServiceType: LoadBalancer
 #    externalTrafficPolicy: Cluster
 #    schedulerName: "default"
@@ -307,7 +307,7 @@ spec:
 #   serviceAnnotations:
 #     service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
   pmm:
-    enabled: true
+    enabled: false
     image: perconalab/percona-xtradb-cluster-operator:rbc-pmm2-client
     serverHost: 35.210.174.11
     serverUser: admin
