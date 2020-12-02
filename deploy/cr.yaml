@@ -37,8 +37,33 @@ spec:
 #    readinessDelaySec: 15
 #    livenessDelaySec: 300
 #    forceUnsafeBootstrap: false
-#    configuration: |
-#      [mysqld]
+    configuration: |
+      [mysqld]
+       max_connections=1000
+       innodb-adaptive-hash-index=FALSE
+       innodb-buffer-pool-size=3G
+       innodb_buffer_pool_instances=8
+       innodb-flush-method=O_DIRECT
+       innodb-log-file-size=500M
+       innodb-log-files-in-group=5
+       innodb_monitor_enable=all
+       innodb-page-cleaners=4
+       innodb-purge-threads=4
+       thread_pool_size=6
+       binlog_cache_size = 10M
+       binlog_stmt_cache_size = 10M
+       join_buffer_size = 1G
+       max_heap_table_size = 16M
+       read_buffer_size = 4M
+       read_rnd_buffer_size = 16M
+       sort_buffer_size = 5M
+       tmp_table_size = 16M
+       table_definition_cache  = 4096
+       table_open_cache=4096
+       thread_cache_size= 1000
+       thread_stack= 256K
+       table-open-cache-instances =4
+       tablespace-definition-cache =256 
 #      wsrep_debug=ON
 #      wsrep_provider_options="gcache.size=1G; gcache.recover=yes"
 #      [sst]
@@ -62,8 +87,8 @@ spec:
 #    imagePullPolicy: Always
     resources:
       requests:
-        memory: 1G
-        cpu: 600m
+        memory: 4G
+#        cpu: 1500m
 #        ephemeral-storage: 1Gi
 #      limits:
 #        memory: 1G
@@ -307,7 +332,7 @@ spec:
 #   serviceAnnotations:
 #     service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
   pmm:
-    enabled: false
+    enabled: true
     image: perconalab/percona-xtradb-cluster-operator:rbc-pmm2-client
     serverHost: 35.210.174.11
     serverUser: admin
@@ -399,7 +424,7 @@ spec:
             accessModes: [ "ReadWriteOnce" ]
             resources:
               requests:
-                storage: 6Gi
+                storage: 100Gi
     schedule:
       - name: "sat-night-backup"
         schedule: "0 0 * * 6"
