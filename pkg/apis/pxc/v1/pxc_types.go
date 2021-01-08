@@ -2,7 +2,6 @@ package v1
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 
 	"github.com/go-ini/ini"
@@ -59,10 +58,19 @@ const (
 type PXCScheduledBackup struct {
 	Image              string                        `json:"image,omitempty"`
 	ImagePullSecrets   []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	ImagePullPolicy    corev1.PullPolicy             `json:"imagePullPolicy,omitempty"`
 	Schedule           []PXCScheduledBackupSchedule  `json:"schedule,omitempty"`
 	Storages           map[string]*BackupStorageSpec `json:"storages,omitempty"`
 	ServiceAccountName string                        `json:"serviceAccountName,omitempty"`
 	Annotations        map[string]string             `json:"annotations,omitempty"`
+	PITR               PITRSpec                      `json:"pitr,omitempty"`
+}
+
+type PITRSpec struct {
+	Enabled            bool          `json:"enabled"`
+	StorageName        string        `json:"storageName"`
+	Resources          *PodResources `json:"resources,omitempty"`
+	TimeBetweenUploads int64         `json:"timeBetweenUploads,omitempty"`
 }
 
 type PXCScheduledBackupSchedule struct {
@@ -154,19 +162,11 @@ func (cr *PerconaXtraDBCluster) Validate() error {
 		return errors.Errorf("spec.pxc section is not specified. Please check %s cluster settings", cr.Name)
 	}
 
-	if pxcIMG := os.Getenv("RELATED_IMAGE_PXC"); len(pxcIMG) > 0 {
-		c.PXC.Image = pxcIMG
-	}
-
 	if c.PXC.Image == "" {
 		return errors.New("pxc.Image can't be empty")
 	}
 
 	if c.PMM != nil && c.PMM.Enabled {
-		if pmmIMG := os.Getenv("RELATED_IMAGE_PMM"); len(pmmIMG) > 0 {
-			c.PMM.Image = pmmIMG
-		}
-
 		if c.PMM.Image == "" {
 			return errors.New("pmm.Image can't be empty")
 		}
@@ -186,20 +186,12 @@ func (cr *PerconaXtraDBCluster) Validate() error {
 	}
 
 	if c.HAProxy != nil && c.HAProxy.Enabled {
-		if haproxyIMG := os.Getenv("RELATED_IMAGE_HAPROXY"); len(haproxyIMG) > 0 {
-			c.HAProxy.Image = haproxyIMG
-		}
-
 		if c.HAProxy.Image == "" {
 			return errors.New("haproxy.Image can't be empty")
 		}
 	}
 
 	if c.ProxySQL != nil && c.ProxySQL.Enabled {
-		if proxysqlIMG := os.Getenv("RELATED_IMAGE_PROXYSQL"); len(proxysqlIMG) > 0 {
-			c.ProxySQL.Image = proxysqlIMG
-		}
-
 		if c.ProxySQL.Image == "" {
 			return errors.New("proxysql.Image can't be empty")
 		}
@@ -213,14 +205,14 @@ func (cr *PerconaXtraDBCluster) Validate() error {
 	}
 
 	if c.Backup != nil {
-		if backupIMG := os.Getenv("RELATED_IMAGE_BACKUP"); len(backupIMG) > 0 {
-			c.Backup.Image = backupIMG
-		}
-
 		if c.Backup.Image == "" {
 			return errors.New("backup.Image can't be empty")
 		}
-
+		if cr.Spec.Backup.PITR.Enabled {
+			if len(cr.Spec.Backup.PITR.StorageName) == 0 {
+				return errors.Errorf("backup.PITR.StorageName can't be empty")
+			}
+		}
 		for _, sch := range c.Backup.Schedule {
 			strg, ok := cr.Spec.Backup.Storages[sch.StorageName]
 			if !ok {
@@ -321,6 +313,8 @@ type PMMSpec struct {
 	ServerHost               string                  `json:"serverHost,omitempty"`
 	Image                    string                  `json:"image,omitempty"`
 	ServerUser               string                  `json:"serverUser,omitempty"`
+	PxcParams                string                  `json:"pxcParams,omitempty"`
+	ProxysqlParams           string                  `json:"proxysqlParams,omitempty"`
 	Resources                *PodResources           `json:"resources,omitempty"`
 	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 	ImagePullPolicy          corev1.PullPolicy       `json:"imagePullPolicy,omitempty"`
@@ -527,6 +521,10 @@ func (cr *PerconaXtraDBCluster) CheckNSetDefaults(serverVersion *version.ServerV
 		if c.LogCollector != nil && c.LogCollector.Resources == nil {
 			c.LogCollector.Resources = c.PXC.Resources
 		}
+
+		if len(c.LogCollectorSecretName) == 0 {
+			c.LogCollectorSecretName = cr.Name + "-log-collector"
+		}
 	}
 
 	if c.PMM != nil && c.PMM.Enabled {
@@ -610,6 +608,16 @@ func (cr *PerconaXtraDBCluster) CheckNSetDefaults(serverVersion *version.ServerV
 	}
 
 	if c.Backup != nil {
+
+		if len(c.Backup.ImagePullPolicy) == 0 {
+			c.Backup.ImagePullPolicy = corev1.PullAlways
+		}
+		if cr.Spec.Backup.PITR.Enabled {
+			if cr.Spec.Backup.PITR.TimeBetweenUploads == 0 {
+				cr.Spec.Backup.PITR.TimeBetweenUploads = 60
+			}
+		}
+
 		for _, sch := range c.Backup.Schedule {
 			strg := c.Backup.Storages[sch.StorageName]
 			switch strg.Type {

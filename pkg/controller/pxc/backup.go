@@ -4,27 +4,73 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/pkg/errors"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	api "github.com/percona/percona-xtradb-cluster-operator/pkg/apis/pxc/v1"
+
+	"github.com/percona/percona-xtradb-cluster-operator/pkg/k8s"
+	"github.com/percona/percona-xtradb-cluster-operator/pkg/pxc/app/deployment"
 	"github.com/percona/percona-xtradb-cluster-operator/pkg/pxc/backup"
 )
 
 func (r *ReconcilePerconaXtraDBCluster) reconcileBackups(cr *api.PerconaXtraDBCluster) error {
 	backups := make(map[string]api.PXCScheduledBackupSchedule)
-	operatorPod, err := r.operatorPod()
+	operatorPod, err := k8s.OperatorPod(r.client)
 	if err != nil {
 		return errors.Wrap(err, "get operator deployment")
 	}
 
 	if cr.Spec.Backup != nil {
 		bcpObj := backup.New(cr)
+
+		if cr.Status.Status == api.AppStateReady && cr.Spec.Backup.PITR.Enabled {
+			binlogCollector, err := deployment.GetBinlogCollectorDeployment(cr)
+			if err != nil {
+				return errors.Errorf("get binlog collector deployment for cluster '%s': %v", cr.Name, err)
+			}
+			binlogCollectorName := deployment.GetBinlogCollectorDeploymentName(cr)
+			currentCollector := appsv1.Deployment{}
+			err = r.client.Get(context.TODO(), types.NamespacedName{Name: binlogCollectorName, Namespace: cr.Namespace}, &currentCollector)
+			if err != nil && k8serrors.IsNotFound(err) {
+				err = r.client.Create(context.TODO(), &binlogCollector)
+				if err != nil && !k8serrors.IsAlreadyExists(err) {
+					return fmt.Errorf("create binlog collector deployment for cluster '%s': %v", cr.Name, err)
+				}
+			} else if err != nil {
+				return fmt.Errorf("get binlogCollector '%s': %v", binlogCollectorName, err)
+			} else {
+				currentCollector.Spec = binlogCollector.Spec
+				err = r.client.Update(context.TODO(), &currentCollector)
+				if err != nil {
+					return fmt.Errorf("update binlogCollector '%s': %v", binlogCollectorName, err)
+				}
+			}
+		}
+		if !cr.Spec.Backup.PITR.Enabled {
+			collectorDeployment := appsv1.Deployment{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      deployment.GetBinlogCollectorDeploymentName(cr),
+					Namespace: cr.Namespace,
+				},
+			}
+			err = r.client.Delete(context.TODO(), &collectorDeployment)
+			if err != nil && !k8serrors.IsNotFound(err) {
+				errors.Wrap(err, "remove pitr deployment")
+			}
+		}
 
 		for _, bcp := range cr.Spec.Backup.Schedule {
 			backups[bcp.Name] = bcp
@@ -44,19 +90,23 @@ func (r *ReconcilePerconaXtraDBCluster) reconcileBackups(cr *api.PerconaXtraDBCl
 
 			// Check if this Job already exists
 			currentBcpJob := new(batchv1beta1.CronJob)
-			err = r.client.Get(context.TODO(), types.NamespacedName{Name: bcpjob.Name, Namespace: bcpjob.Namespace}, currentBcpJob)
-			if err != nil && k8serrors.IsNotFound(err) {
-				// reqLogger.Info("Creating a new backup job", "Namespace", bcpjob.Namespace, "Name", bcpjob.Name)
+			err = r.client.Get(context.TODO(), types.NamespacedName{
+				Name:      bcpjob.Name,
+				Namespace: bcpjob.Namespace,
+			}, currentBcpJob)
+			if err != nil && !k8serrors.IsNotFound(err) {
+				return errors.Wrapf(err, "create scheduled backup %s", bcp.Name)
+			}
+
+			if k8serrors.IsNotFound(err) {
 				err = r.client.Create(context.TODO(), bcpjob)
 				if err != nil {
-					return fmt.Errorf("create scheduled backup '%s': %v", bcp.Name, err)
+					return errors.Wrapf(err, "create scheduled backup %s", bcp.Name)
 				}
-			} else if err != nil {
-				return fmt.Errorf("create scheduled backup '%s': %v", bcp.Name, err)
-			} else {
+			} else if !reflect.DeepEqual(currentBcpJob.Spec, bcpjob.Spec) {
 				err = r.client.Update(context.TODO(), bcpjob)
 				if err != nil {
-					return fmt.Errorf("update backup schedule '%s': %v", bcp.Name, err)
+					return errors.Wrapf(err, "update backup schedule %s", bcp.Name)
 				}
 			}
 		}
