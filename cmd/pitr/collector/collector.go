@@ -32,7 +32,7 @@ type Config struct {
 	PXCServiceName string `env:"PXC_SERVICE,required"`
 	PXCUser        string `env:"PXC_USER,required"`
 	PXCPass        string `env:"PXC_PASS,required"`
-	S3Endpoint     string `env:"ENDPOINT,required"`
+	S3Endpoint     string `env:"ENDPOINT" envDefault:"s3.amazonaws.com"`
 	S3AccessKeyID  string `env:"ACCESS_KEY_ID,required"`
 	S3AccessKey    string `env:"SECRET_ACCESS_KEY,required"`
 	S3BucketURL    string `env:"S3_BUCKET_URL,required"`
@@ -72,7 +72,6 @@ func New(c Config) (*Collector, error) {
 		storage:        s3,
 		lastSet:        string(lastSet),
 		pxcUser:        c.PXCUser,
-		pxcPass:        c.PXCPass,
 		pxcServiceName: c.PXCServiceName,
 	}, nil
 }
@@ -97,10 +96,20 @@ func (c *Collector) newDB() error {
 	if err != nil {
 		return errors.Wrap(err, "get host")
 	}
+
+	file, err := os.Open("/etc/mysql/mysql-users-secret/xtrabackup")
+	if err != nil {
+		return errors.Wrap(err, "open file")
+	}
+	pxcPass, err := ioutil.ReadAll(file)
+	if err != nil {
+		return errors.Wrap(err, "read password")
+	}
+	c.pxcPass = string(pxcPass)
+
 	c.db, err = pxc.NewPXC(host, c.pxcUser, c.pxcPass)
 	if err != nil {
 		return errors.Wrapf(err, "new manager with host %s", host)
-
 	}
 
 	return nil
@@ -222,7 +231,7 @@ func (c *Collector) manageBinlog(binlog string) (err error) {
 			return
 		}
 	}()
-	err = os.Setenv("MYSQL_PWD", os.Getenv("PXC_PASS"))
+	err = os.Setenv("MYSQL_PWD", c.pxcPass)
 	if err != nil {
 		return errors.Wrap(err, "set mysql pwd env var")
 	}
